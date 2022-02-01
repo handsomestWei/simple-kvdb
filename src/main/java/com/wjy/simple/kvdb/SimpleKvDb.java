@@ -7,9 +7,9 @@ import java.util.*;
 
 public abstract class SimpleKvDb {
 
-    // 数据文件后缀
+    // 数据文件后缀。字节存储
     private static final String DATA_SUFFIX = ".data";
-    // 元数据文件后缀
+    // 元数据文件后缀。按行存储，格式为key:数据起始位置:数据长度
     private static final String META_SUFFIX = ".meta";
     // 元数据备份文件后缀
     private static final String META_BAK_SUFFIX = ".meta.bak";
@@ -19,8 +19,8 @@ public abstract class SimpleKvDb {
     private String dbName;
     private String dbPath;
     private HashMap<String, MetaData> metaDataMap = new HashMap<>();
-    // 锁标记。元数据刷盘时，只可读不可写数据
-    private static boolean rockFlag = false;
+    // 使用共享变量实现简单锁。元数据刷盘时，只可读不可写
+    private static boolean lockFlag = false;
     // 运行状态。运行true，关闭false
     private boolean status = false;
     // 数据文件操作对象
@@ -37,7 +37,7 @@ public abstract class SimpleKvDb {
         this.status = true;
     }
 
-    // 实现类需实现对象的序列化方法
+    // 继承类需实现对象转字节数组的方法
     public abstract byte[] toBytes(Object data) throws IOException;
 
     public boolean isRunning() {
@@ -65,9 +65,7 @@ public abstract class SimpleKvDb {
         if (!isRunning()) {
             return false;
         }
-        while (rockFlag == true) {
-            // 元数据刷盘，暂停写数据
-        }
+        isLock();
         MetaData metaData = metaDataMap.get(key);
         if (metaData != null) {
             return updateData(key, data);
@@ -80,9 +78,7 @@ public abstract class SimpleKvDb {
         if (!isRunning()) {
             return false;
         }
-        while (rockFlag == true) {
-            // 元数据刷盘，暂停写数据
-        }
+        isLock();
         MetaData metaData = metaDataMap.get(key);
         if (metaData == null) {
             return false;
@@ -101,9 +97,7 @@ public abstract class SimpleKvDb {
         if (!isRunning()) {
             return false;
         }
-        while (rockFlag == true) {
-            // 元数据刷盘，暂停写数据
-        }
+        isLock();
         return metaDataMap.remove(key) != null;
     }
 
@@ -169,14 +163,10 @@ public abstract class SimpleKvDb {
         raf = new RandomAccessFile(dataFile, "rw");
     }
 
-    // 元数据刷盘
+    // 存储在运行内存的元数据定时保存到文件
     public static void flushMetaData(String dbName, String dbPath, HashMap<String, MetaData> metaDataMap) throws IOException {
-        while (rockFlag == true) {
-            // 等待获取锁
-        }
-        // 获取锁
-        rockFlag = true;
-        // 将内存里最新数据写入文件
+        getLock();
+        // 将内存里全量元数据写入新文件
         File metaBakDataFile = new File(dbPath + dbName + META_BAK_SUFFIX);
         if (metaBakDataFile.length() > 0) {
             // 清理旧文件
@@ -200,8 +190,7 @@ public abstract class SimpleKvDb {
             // 对新文件重命名
             metaBakDataFile.renameTo(metaFile);
         }
-        // 释放锁
-        rockFlag = false;
+        releaseLock();
     }
 
     // 使用新区域写数据
@@ -228,6 +217,25 @@ public abstract class SimpleKvDb {
         return true;
     }
 
+    private void isLock() {
+        while (lockFlag == true) {
+            // 等待
+        }
+    }
+
+    private static void getLock() {
+        while (lockFlag == true) {
+            // 等待获取锁
+        }
+        lockFlag = true;
+    }
+
+    private static void releaseLock() {
+        // 释放锁
+        lockFlag = false;
+    }
+
+    // 定时执行元数据刷盘任务
     private void runFlushMetaDataTask() {
         TimerTask task = new TimerTask() {
             @SneakyThrows
