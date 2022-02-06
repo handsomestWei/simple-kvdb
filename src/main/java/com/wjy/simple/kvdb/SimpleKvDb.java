@@ -4,6 +4,7 @@ import lombok.*;
 
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public abstract class SimpleKvDb {
 
@@ -18,13 +19,12 @@ public abstract class SimpleKvDb {
 
     private String dbName;
     private String dbPath;
-    private HashMap<String, MetaData> metaDataMap = new HashMap<>();
+    private ConcurrentHashMap<String, MetaData> metaDataMap = new ConcurrentHashMap<>();
     // 使用共享变量实现简单锁。元数据刷盘时，只可读不可写
     private static boolean lockFlag = false;
     // 运行状态。运行true，关闭false
     private boolean status = false;
     // 数据文件操作对象
-    // TODO 多线程写时可能要对raf加锁如synchronized避免游标偏移出错
     private RandomAccessFile raf = null;
 
     public SimpleKvDb(@NonNull String dbName, @NonNull String dbPath) throws IOException {
@@ -106,7 +106,7 @@ public abstract class SimpleKvDb {
             return false;
         }
         flushMetaData(dbName, dbPath, metaDataMap);
-        this.metaDataMap = new HashMap<>();
+        this.metaDataMap = new ConcurrentHashMap<>();
         this.raf.close();
         this.status = false;
         return true;
@@ -164,7 +164,7 @@ public abstract class SimpleKvDb {
     }
 
     // 存储在运行内存的元数据定时保存到文件
-    public static void flushMetaData(String dbName, String dbPath, HashMap<String, MetaData> metaDataMap) throws IOException {
+    public static void flushMetaData(String dbName, String dbPath, ConcurrentHashMap<String, MetaData> metaDataMap) throws IOException {
         getLock();
         // 将内存里全量元数据写入新文件
         File metaBakDataFile = new File(dbPath + dbName + META_BAK_SUFFIX);
@@ -195,9 +195,7 @@ public abstract class SimpleKvDb {
 
     // 使用新区域写数据
     private boolean writeDataNewSpace(String key, byte[] bytes) throws IOException {
-        long startIndex = raf.length();
-        raf.seek(startIndex);
-        raf.write(bytes);
+        long startIndex = seekAndWriteFile(bytes);
         metaDataMap.put(key, new MetaData(startIndex, bytes.length));
         return true;
     }
@@ -211,10 +209,25 @@ public abstract class SimpleKvDb {
         if (metaData.dataSize < bytes.length) {
             return false;
         }
-        raf.seek(metaData.startIndex);
-        raf.write(bytes);
+        seekAndWriteFile(metaData.startIndex, bytes);
         metaData.dataSize = bytes.length;
         return true;
+    }
+
+    private void seekAndWriteFile(long seekIndex, byte[] bytes) throws IOException {
+        synchronized (raf) {
+            raf.seek(seekIndex);
+            raf.write(bytes);
+        }
+    }
+
+    private long seekAndWriteFile(byte[] bytes) throws IOException {
+        synchronized (raf) {
+            long startIndex = raf.length();
+            raf.seek(startIndex);
+            raf.write(bytes);
+            return startIndex;
+        }
     }
 
     private void isLock() {

@@ -5,7 +5,7 @@
     <groupId>com.wjy.simple</groupId>
     <artifactId>kvdb</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>kvdb</name>
+    <name>simple-kvdb</name>
     <description>simple kv db</description>
 
     <properties>
